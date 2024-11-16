@@ -62,12 +62,6 @@ typedef struct UnitModule {
     const UnitHeader *units[MAX_MODULE_ENTRIES];
 } UnitModule;
 
-#define UnitModule_foreach_import(module, elem) \
-    for (const struct UnitModule *elem = module->imports; elem != NULL; ++elem)
-
-#define UnitModule_foreach_unit(module, elem) \
-    for (const UnitHeader *elem = module->units; elem != NULL; ++elem)
-
 typedef struct {
     const ReflectionEntry name;
     void *slot;
