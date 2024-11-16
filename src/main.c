@@ -329,10 +329,9 @@ Base64String mock_encode(ArrayByte _) {
 void Test_SaltSerializer_serialize() {
     printf("[Test_SaltSerializer_serialize] Start\n");
 
-    struct Base64Encoder encoder = {
+    Unit_SaltSerializer._encoder = &(struct Base64Encoder){
         .encode = mock_encode,
     };
-    ((struct SaltSerializer *)&Unit_SaltSerializer)->_encoder = &encoder;
 
     Base64String s = SaltSerializer_serialize((PasswordSalt) {
         .bytes = (ArrayByte) {
