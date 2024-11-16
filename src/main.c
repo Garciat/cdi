@@ -24,6 +24,7 @@ bool ByteArray_equal_str(ByteArray a, const char *b) {
 
 ////////////////////////
 
+#define MAX_MODULE_IMPORTS 16
 #define MAX_MODULE_ENTRIES 16
 
 typedef const char *ReflectionKey;
@@ -52,6 +53,24 @@ typedef struct {
     ReflectionEntry name;
 } ModuleHeader;
 
+struct UnitModule;
+
+typedef struct UnitModule {
+    ModuleHeader __HEADER;
+    const struct UnitModule *imports[MAX_MODULE_IMPORTS];
+    const UnitHeader *units[MAX_MODULE_ENTRIES];
+} UnitModule;
+
+typedef struct {
+    const ReflectionEntry name;
+    void *slot;
+} UnitDependencyDecl;
+
+typedef struct {
+    UnitHeader header;
+    UnitDependencyDecl dependencies[];
+} UnitReflection;
+
 #define MODULE_INIT(module_name) \
     .__HEADER = { \
         .name = { \
@@ -59,6 +78,9 @@ typedef struct {
             .value = #module_name, \
         }, \
     },
+
+#define UNIT_ADD(unit_obj) \
+    &unit_obj.__HEADER
 
 #define UNIT_DECL(unit_name) \
     UnitHeader __HEADER;
@@ -72,39 +94,26 @@ typedef struct {
         .initialized = false, \
     },
 
+// Fields MUST align with `UnitDependencyDecl`
 #define DEPENDENCY_DECL(type, name) \
     ReflectionEntry __DEP_##name; \
     struct type *name;
-
-#define DEPENDENCY_DECL_END() \
-    ReflectionEntry __DEP_END;
 
 #define DEPENDENCY_INIT(type, name) \
     .__DEP_##name = { \
         .key = REFLECTION_KEY_DEPENDENCY_TYPE, \
         .value = #type, \
-    },
+    }, \
+    .name = NULL,
+
+#define DEPENDENCY_DECL_END() \
+    ReflectionEntry __DEP_END;
 
 #define DEPENDENCY_INIT_END() \
     .__DEP_END = { \
         .key = REFLECTION_KEY_DEPENDENCY_END, \
         .value = REFLECTION_KEY_DEPENDENCY_END, \
     },
-
-typedef struct {
-    ModuleHeader __HEADER;
-    const void *entries[MAX_MODULE_ENTRIES];
-} UnitModule;
-
-typedef struct {
-    const ReflectionEntry typeName;
-    void *dependency;
-} UnitDependencyHole;
-
-typedef struct {
-    UnitHeader header;
-    UnitDependencyHole dependencies[];
-} UnitReflection;
 
 struct UnitList {
     UnitReflection *unit;
@@ -129,20 +138,15 @@ struct UnitList* UnitList_push(struct UnitList *list, UnitReflection *unit) {
 }
 
 struct UnitList* UnitModule_walk(const UnitModule *module, struct UnitList *list) {
-    for (int i = 0; module->entries[i] != NULL; i++) {
-        const void *entry = module->entries[i];
-
-        const ReflectionEntry *info = (const ReflectionEntry *)entry;
-
-        if (info->key == REFLECTION_KEY_UNIT_NAME) {
-            UnitReflection *unit = (UnitReflection *)entry;
-            list = UnitList_push(list, unit);
-        } else if (info->key == REFLECTION_KEY_MODULE_NAME) {
-            list = UnitModule_walk(entry, list);
-        } else {
-            panic("Unknown reflection key");
-        }
+    for (int i = 0; module->units[i] != NULL; i++) {
+        UnitReflection *unit = (UnitReflection *)module->units[i]; // upcast
+        list = UnitList_push(list, unit);
     }
+
+    for (int i = 0; module->imports[i] != NULL; i++) {
+        list = UnitModule_walk(module->imports[i], list);
+    }
+
     return list;
 }
 
@@ -162,16 +166,15 @@ void Unit_init(struct UnitList *units, UnitReflection *target) {
 
     printf("[%s] Initializing\n", target->header.name.value);
 
-    for (UnitDependencyHole *hole = target->dependencies; hole->typeName.key != REFLECTION_KEY_DEPENDENCY_END; ++hole) {
-        if (hole->typeName.key == REFLECTION_KEY_DEPENDENCY_TYPE) {
-            UnitReflection *unit = UnitList_lookup(units, hole->typeName.value);
+    for (UnitDependencyDecl *decl = target->dependencies; decl->name.key != REFLECTION_KEY_DEPENDENCY_END; ++decl) {
+        if (decl->name.key == REFLECTION_KEY_DEPENDENCY_TYPE) {
+            UnitReflection *unit = UnitList_lookup(units, decl->name.value);
             if (unit == NULL) {
-                printf("[%s] Not found: %s\n", target->header.name.value, hole->typeName.value);
+                printf("[%s] Not found: %s\n", target->header.name.value, decl->name.value);
                 panic("Dependency not found");
             }
-            Unit_init(units, unit);
-            hole->dependency = (void *)unit;
-            printf("[%s] Resolved: %s\n", target->header.name.value, hole->typeName.value);
+            decl->slot = (void *)unit;
+            printf("[%s] Resolved: %s\n", target->header.name.value, decl->name.value);
         } else {
             panic("Unknown reflection key");
         }
@@ -281,10 +284,9 @@ UnitModule UnitModule_Passwords;
 
 UnitModule UnitModule_Passwords = {
     MODULE_INIT(Passwords)
-    .entries = {
-        &Unit_Base64Encoder,
-        &Unit_SaltSerializer,
-        NULL
+    .units = {
+        UNIT_ADD(Unit_Base64Encoder),
+        UNIT_ADD(Unit_SaltSerializer),
     }
 };
 
@@ -298,10 +300,9 @@ UnitModule UnitModule_Main;
 
 UnitModule UnitModule_Main = {
     MODULE_INIT(Main)
-    .entries = {
+    .imports = {
         &UnitModule_Passwords,
-        NULL
-    }
+    },
 };
 
 // ========================
