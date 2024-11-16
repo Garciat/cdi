@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,15 +62,48 @@ typedef struct UnitModule {
     const UnitHeader *units[MAX_MODULE_ENTRIES];
 } UnitModule;
 
+#define UnitModule_foreach_import(module, elem) \
+    for (const struct UnitModule *elem = module->imports; elem != NULL; ++elem)
+
+#define UnitModule_foreach_unit(module, elem) \
+    for (const UnitHeader *elem = module->units; elem != NULL; ++elem)
+
 typedef struct {
     const ReflectionEntry name;
     void *slot;
 } UnitDependencyDecl;
 
+void UnitDependencyDecl_set_slot(UnitDependencyDecl *decl, void *slot) {
+    decl->slot = slot;
+}
+
+const char *UnitDependencyDecl_name(const UnitDependencyDecl *decl) {
+    return decl->name.value;
+}
+
 typedef struct {
     UnitHeader header;
     UnitDependencyDecl dependencies[];
 } UnitReflection;
+
+#define UnitReflection_foreach_dependency(unit, decl) \
+    for (UnitDependencyDecl *decl = unit->dependencies; decl->name.key != REFLECTION_KEY_DEPENDENCY_END; ++decl)
+
+bool UnitReflection_is_initialized(const UnitReflection *unit) {
+    return unit->header.initialized;
+}
+
+void UnitReflection_set_initialized(UnitReflection *unit) {
+    unit->header.initialized = true;
+}
+
+const char *UnitReflection_name(const UnitReflection *unit) {
+    return unit->header.name.value;
+}
+
+bool UnitReflection_has_name(const UnitReflection *unit, const char *name) {
+    return strcmp(unit->header.name.value, name) == 0;
+}
 
 #define MODULE_INIT(module_name) \
     .__HEADER = { \
@@ -120,6 +154,9 @@ struct UnitList {
     const struct UnitList *next;
 };
 
+#define UnitList_foreach(list, elem) \
+    for (const struct UnitList *elem = list; elem != NULL; elem = elem->next)
+
 void UnitList_free(const struct UnitList *list) {
     while (list != NULL) {
         const struct UnitList *next = list->next;
@@ -144,15 +181,16 @@ struct UnitList* UnitModule_walk(const UnitModule *module, struct UnitList *list
     }
 
     for (int i = 0; module->imports[i] != NULL; i++) {
-        list = UnitModule_walk(module->imports[i], list);
+        const struct UnitModule *import = module->imports[i];
+        list = UnitModule_walk(import, list);
     }
 
     return list;
 }
 
 UnitReflection* UnitList_lookup(const struct UnitList list[static 1], const char *name) {
-    for (const struct UnitList *elem = list; elem != NULL; elem = elem->next) {
-        if (elem->unit->header.name.value == name) {
+    UnitList_foreach(list, elem) {
+        if (UnitReflection_has_name(elem->unit, name)) {
             return elem->unit;
         }
     }
@@ -160,33 +198,33 @@ UnitReflection* UnitList_lookup(const struct UnitList list[static 1], const char
 }
 
 void Unit_init(struct UnitList *units, UnitReflection *target) {
-    if (target->header.initialized) {
+    if (UnitReflection_is_initialized(target)) {
         return;
     }
 
-    printf("[%s] Initializing\n", target->header.name.value);
+    printf("[%s] Initializing\n", UnitReflection_name(target));
 
-    for (UnitDependencyDecl *decl = target->dependencies; decl->name.key != REFLECTION_KEY_DEPENDENCY_END; ++decl) {
-        if (decl->name.key == REFLECTION_KEY_DEPENDENCY_TYPE) {
-            UnitReflection *unit = UnitList_lookup(units, decl->name.value);
-            if (unit == NULL) {
-                printf("[%s] Not found: %s\n", target->header.name.value, decl->name.value);
-                panic("Dependency not found");
-            }
-            decl->slot = (void *)unit;
-            printf("[%s] Resolved: %s\n", target->header.name.value, decl->name.value);
-        } else {
-            panic("Unknown reflection key");
+    UnitReflection_foreach_dependency(target, decl) {
+        assert(decl->name.key == REFLECTION_KEY_DEPENDENCY_TYPE);
+
+        UnitReflection *unit = UnitList_lookup(units, UnitDependencyDecl_name(decl));
+        if (unit == NULL) {
+            printf("[%s] Not found: %s\n", UnitReflection_name(target), UnitDependencyDecl_name(decl));
+            panic("Dependency not found");
         }
+
+        UnitDependencyDecl_set_slot(decl, unit);
+
+        printf("[%s] Resolved: %s\n", UnitReflection_name(target), UnitDependencyDecl_name(decl));
     }
 
-    target->header.initialized = true;
+    UnitReflection_set_initialized(target);
 }
 
 void UnitModule_init(const UnitModule *root) {
     struct UnitList *units = UnitModule_walk(root, NULL);
 
-    for (const struct UnitList *elem = units; elem != NULL; elem = elem->next) {
+    UnitList_foreach(units, elem) {
         Unit_init(units, elem->unit);
     }
 
@@ -307,7 +345,7 @@ UnitModule UnitModule_Main = {
 
 // ========================
 
-#define ASSERT(condition) \
+#define TEST_ASSERT(condition) \
     if (!(condition)) { \
         panic("Assertion failed: " #condition); \
     }
@@ -343,9 +381,9 @@ void Test_SaltSerializer_serialize() {
         }
     });
 
-    ASSERT(ByteArray_equal_str(mock_encode_arg, "password"));
+    TEST_ASSERT(ByteArray_equal_str(mock_encode_arg, "password"));
 
-    ASSERT(String_equal_str(s.value, "test"));
+    TEST_ASSERT(String_equal_str(s.value, "test"));
 }
 
 int run_tests() {
