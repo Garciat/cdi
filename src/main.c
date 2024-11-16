@@ -16,7 +16,11 @@ void panic(const char *message) {
 typedef struct {
     const unsigned char *data;
     size_t length;
-} ArrayByte;
+} ByteArray;
+
+bool ByteArray_equal_str(ByteArray a, const char *b) {
+    return a.length == strlen(b) && memcmp(a.data, b, a.length) == 0;
+}
 
 ////////////////////////
 
@@ -193,6 +197,10 @@ typedef struct {
     size_t length;
 } String;
 
+bool String_equal_str(String a, const char *b) {
+    return a.length == strlen(b) && memcmp(a.data, b, a.length) == 0;
+}
+
 ////////////////////////
 
 // INTERFACE
@@ -203,12 +211,12 @@ typedef struct {
 
 struct Base64Encoder;
 
-Base64String Base64Encoder_encode(ArrayByte bytes);
+Base64String Base64Encoder_encode(ByteArray bytes);
 
 struct Base64Encoder {
     UNIT_DECL(Base64Encoder)
     DEPENDENCY_DECL_END()
-    Base64String (*encode)(ArrayByte bytes);
+    Base64String (*encode)(ByteArray bytes);
 };
 
 struct Base64Encoder Unit_Base64Encoder;
@@ -221,7 +229,7 @@ struct Base64Encoder Unit_Base64Encoder = {
     .encode = Base64Encoder_encode,
 };
 
-Base64String Base64Encoder_encode(ArrayByte _) {
+Base64String Base64Encoder_encode(ByteArray _) {
     return (Base64String) {
         .value = (String) {
             .data = "base64",
@@ -235,7 +243,7 @@ Base64String Base64Encoder_encode(ArrayByte _) {
 // INTERFACE
 
 typedef struct {
-    ArrayByte bytes;
+    ByteArray bytes;
 } PasswordSalt;
 
 struct SaltSerializer;
@@ -296,6 +304,57 @@ UnitModule UnitModule_Main = {
     }
 };
 
+// ========================
+
+#define ASSERT(condition) \
+    if (!(condition)) { \
+        panic("Assertion failed: " #condition); \
+    }
+
+#define RUN_TEST(test_name) \
+    printf("[Test] " #test_name " ...\n"); \
+    test_name(); \
+    printf("[Test] " #test_name " OK\n");
+
+// ========================
+
+static ByteArray mock_encode_arg;
+
+static Base64String mock_encode(ByteArray bytes) {
+    mock_encode_arg = bytes;
+    return (Base64String) {
+        .value = (String) {
+            .data = "test",
+            .length = 4
+        }
+    };
+}
+
+void Test_SaltSerializer_serialize() {
+    Unit_SaltSerializer._encoder = &(struct Base64Encoder){
+        .encode = mock_encode,
+    };
+
+    Base64String s = SaltSerializer_serialize((PasswordSalt) {
+        .bytes = (ByteArray) {
+            .data = (const unsigned char *)"password",
+            .length = 8
+        }
+    });
+
+    ASSERT(ByteArray_equal_str(mock_encode_arg, "password"));
+
+    ASSERT(String_equal_str(s.value, "test"));
+}
+
+int run_tests() {
+    printf("Running Tests\n");
+
+    RUN_TEST(Test_SaltSerializer_serialize);
+
+    return 0;
+}
+
 ////////////////////////
 
 int run_app() {
@@ -304,7 +363,7 @@ int run_app() {
     UnitModule_init(&UnitModule_Main);
 
     Base64String s = SaltSerializer_serialize((PasswordSalt) {
-        .bytes = (ArrayByte) {
+        .bytes = (ByteArray) {
             .data = (const unsigned char *)"password",
             .length = 8
         }
@@ -315,47 +374,7 @@ int run_app() {
     return 0;
 }
 
-// ========================
-
-Base64String mock_encode(ArrayByte _) {
-    return (Base64String) {
-        .value = (String) {
-            .data = "test",
-            .length = 4
-        }
-    };
-}
-
-void Test_SaltSerializer_serialize() {
-    printf("[Test_SaltSerializer_serialize] Start\n");
-
-    Unit_SaltSerializer._encoder = &(struct Base64Encoder){
-        .encode = mock_encode,
-    };
-
-    Base64String s = SaltSerializer_serialize((PasswordSalt) {
-        .bytes = (ArrayByte) {
-            .data = (const unsigned char *)"password",
-            .length = 8
-        }
-    });
-
-    if (s.value.length != 4 || memcmp(s.value.data, "test", 4) != 0) {
-        panic("Test failed");
-    }
-
-    printf("[Test_SaltSerializer_serialize] OK\n");
-}
-
-int run_tests() {
-    printf("Running Tests\n");
-
-    Test_SaltSerializer_serialize();
-
-    return 0;
-}
-
-// ========================
+////////////////////////
 
 int main(int argc, char *argv[]) {
     if (argc == 2 && strcmp(argv[1], "test") == 0) {
